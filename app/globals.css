@@ -1,0 +1,62 @@
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    /* Toss body background — subtle cool gray */
+    background-color: #F2F4F6;
+    color: #191F28;
+    font-size: 15px;
+    line-height: 1.5;
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+    letter-spacing: -0.01em;
+  }
+
+  /* Hide number input spinners */
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] { -moz-appearance: textfield; }
+
+  input::placeholder { color: #D1D6DB; }
+
+  /* Toss-ish scrollbar: almost invisible */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #E5E8EB; border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: #D1D6DB; }
+}
+
+@layer utilities {
+  .animate-in {
+    animation: slideIn 0.18s cubic-bezier(0.2, 0, 0, 1);
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Press feedback — Toss uses a subtle scale-down on tap */
+  .press {
+    transition: transform 0.1s cubic-bezier(0.2, 0, 0, 1),
+                background-color 0.1s ease;
+  }
+  .press:active {
+    transform: scale(0.98);
+  }
+}
