@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import { Navbar } from "@/components/layout/Navbar";
 import { NetworkBanner } from "@/components/layout/NetworkBanner";
@@ -47,6 +48,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </WalletProvider>
           </ToastProvider>
         </QueryProvider>
+        {/* Vercel Analytics — 프로덕션 배포에서만 자동 수집. 로컬/프리뷰에서는
+            no-op이라 개발 성능에 영향 없음. */}
+        <Analytics />
       </body>
     </html>
   );
