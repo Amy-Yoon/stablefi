@@ -45,6 +45,12 @@ export interface Pool {
   myDepositedWKRC?: number;
   myEarnedWKRC?: number;
   myPositionSlices?: PoolPositionSlice[];
+  /** 누적 수령된 수수료 — V3 한정 (V2 는 LP 가격에 자동 반영). */
+  myRealizedFeesWKRC?: number;
+  /** 가장 오래된 mint 시각 — UI 의 "X일 전 시작" 표시용. */
+  myOldestMintTimestamp?: number;
+  /** 풀 단위 weighted-avg 연 환산 수익률 (%) — V3 한정. */
+  myEffectiveAPR?: number;
 }
 
 interface PoolListProps {
@@ -182,9 +188,12 @@ function MyPositionCard({
   onAdd: () => void;
   onWithdraw: () => void;
 }) {
+  // 누적 수수료 (실현 + 미실현). V2 는 realizedFees 가 0/undefined 라 미수령만 표시.
+  const totalFees =
+    (pool.myEarnedWKRC ?? 0) + (pool.myRealizedFeesWKRC ?? 0);
   const earnedPct =
-    pool.myDepositedWKRC && pool.myEarnedWKRC
-      ? (pool.myEarnedWKRC / pool.myDepositedWKRC) * 100
+    pool.myDepositedWKRC && totalFees > 0
+      ? (totalFees / pool.myDepositedWKRC) * 100
       : undefined;
 
   return (
@@ -196,7 +205,14 @@ function MyPositionCard({
           <p className="text-[15px] font-bold text-neutral-900 truncate">
             {pool.token0.symbol} / {pool.token1.symbol}
           </p>
-          <VersionBadge pool={pool} />
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <VersionBadge pool={pool} />
+            {pool.myOldestMintTimestamp && (
+              <span className="text-[11px] text-neutral-400">
+                · {formatStartedAgo(pool.myOldestMintTimestamp)}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -211,13 +227,28 @@ function MyPositionCard({
         </div>
       </div>
 
-      {/* earnings — red gain (Korean) */}
+      {/* earnings — 누적 수수료 (실현+미실현) + 비율 */}
       <p className="text-[13px] font-bold text-gain-500 tabular-nums mt-1.5">
-        +{Math.round(pool.myEarnedWKRC ?? 0).toLocaleString("ko-KR")}원
+        +{Math.round(totalFees).toLocaleString("ko-KR")}원
         {earnedPct !== undefined && (
           <span className="ml-1 text-gain-500/80">({earnedPct.toFixed(1)}%)</span>
         )}
+        {(pool.myRealizedFeesWKRC ?? 0) > 0 && (
+          <span className="ml-1.5 text-[11px] font-medium text-neutral-400">
+            · 받은 {Math.round(pool.myRealizedFeesWKRC ?? 0).toLocaleString("ko-KR")} · 안 받은 {Math.round(pool.myEarnedWKRC ?? 0).toLocaleString("ko-KR")}
+          </span>
+        )}
       </p>
+
+      {/* effective APR — 시간 정규화된 연 환산 수익률 */}
+      {pool.myEffectiveAPR !== undefined && (
+        <div className="mt-3 px-3 py-2 rounded-toss bg-gain-50 flex items-baseline justify-between">
+          <p className="text-[12px] font-bold text-neutral-700">연 환산 수익률</p>
+          <p className="text-[15px] font-black text-gain-500 tabular-nums">
+            {formatAPR(pool.myEffectiveAPR)}
+          </p>
+        </div>
+      )}
 
       {/* actions */}
       <div className="flex gap-2 mt-5">
@@ -241,6 +272,25 @@ function MyPositionCard({
       </div>
     </div>
   );
+}
+
+// ── APR / 진입경과 시간 formatter ────────────────────────────────────────
+// effective APR 은 1000% 까지만 표시 — 그 이상은 초기 풀 노이즈로 간주하고
+// ">1000%" 로 캡. 음수는 보호 (이론상 없지만 collect/decrease 추정 오차로 가능).
+
+function formatAPR(apr: number): string {
+  if (!Number.isFinite(apr) || apr < 0) return "—";
+  if (apr > 1000) return ">1000%";
+  return `${apr.toFixed(2)}%`;
+}
+
+function formatStartedAgo(ts: number): string {
+  const diff = Math.floor(Date.now() / 1000) - ts;
+  if (diff < 60) return "방금 시작";
+  if (diff < 3600) return `${Math.floor(diff / 60)}분 전 시작`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}시간 전 시작`;
+  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)}일 전 시작`;
+  return `${Math.floor(diff / (86400 * 30))}개월 전 시작`;
 }
 
 // ── My Positions Summary ─────────────────────────────────────────────────────
@@ -292,9 +342,11 @@ function MyPositionRow({
   onOpen: () => void;
   onWithdraw: () => void;
 }) {
+  const totalFees =
+    (pool.myEarnedWKRC ?? 0) + (pool.myRealizedFeesWKRC ?? 0);
   const earnedPct =
-    pool.myDepositedWKRC && pool.myEarnedWKRC
-      ? (pool.myEarnedWKRC / pool.myDepositedWKRC) * 100
+    pool.myDepositedWKRC && totalFees > 0
+      ? (totalFees / pool.myDepositedWKRC) * 100
       : undefined;
 
   return (
@@ -311,15 +363,20 @@ function MyPositionRow({
           </p>
           <div className="flex items-center gap-1.5 mt-0.5">
             <VersionBadge pool={pool} />
+            {pool.myEffectiveAPR !== undefined && (
+              <span className="text-[10px] font-bold text-gain-500 bg-gain-50 px-1.5 py-0.5 rounded">
+                연 {formatAPR(pool.myEffectiveAPR)}
+              </span>
+            )}
           </div>
         </div>
         <div className="text-right shrink-0">
           <p className="text-[14px] font-bold text-neutral-900 tabular-nums leading-none">
             {Math.round(pool.myDepositedWKRC ?? 0).toLocaleString("ko-KR")}원
           </p>
-          {(pool.myEarnedWKRC ?? 0) > 0 && (
+          {totalFees > 0 && (
             <p className="text-[11px] font-bold text-gain-500 tabular-nums mt-1 leading-none">
-              +{Math.round(pool.myEarnedWKRC ?? 0).toLocaleString("ko-KR")}원
+              +{Math.round(totalFees).toLocaleString("ko-KR")}원
               {earnedPct !== undefined && (
                 <span className="ml-0.5 text-gain-500/80">({earnedPct.toFixed(1)}%)</span>
               )}
@@ -373,16 +430,25 @@ function PoolRow({ pool, onDeposit }: { pool: Pool; onDeposit: () => void }) {
       </div>
 
       <div className="text-right shrink-0">
-        {pool.apr !== undefined ? (
+        {pool.apr === undefined ? (
+          // stats 응답 전 — 아직 모름
+          <p className="text-[12px] font-medium text-neutral-300">집계 중</p>
+        ) : (pool.volume24hWKRC ?? 0) === 0 ? (
+          // 7d 거래량 0 — APR 0% 라기보다 "데이터 없음" 표현이 정직
           <>
-            <p className="text-[11px] font-medium text-neutral-400 leading-none">연 수익률</p>
-            <p className="text-[22px] font-black text-gain-500 tracking-tight tabular-nums leading-none mt-1">
-              {pool.apr.toFixed(1)}
-              <span className="text-[13px] font-bold ml-0.5">%</span>
+            <p className="text-[11px] font-medium text-neutral-400 leading-none">최근 7일</p>
+            <p className="text-[13px] font-bold text-neutral-300 tracking-tight leading-none mt-1.5">
+              거래 없음
             </p>
           </>
         ) : (
-          <p className="text-[12px] font-medium text-neutral-300">집계 중</p>
+          <>
+            <p className="text-[11px] font-medium text-neutral-400 leading-none">연 수익률</p>
+            <p className="text-[16px] font-black text-gain-500 tracking-tight tabular-nums leading-none mt-1.5">
+              {pool.apr.toFixed(2)}
+              <span className="text-[11px] font-bold ml-0.5">%</span>
+            </p>
+          </>
         )}
       </div>
 

@@ -183,8 +183,11 @@ export function rankRoutes(
     const rate = fromIs0 ? p.price1Per0 : p.price0Per1;
     if (!Number.isFinite(rate) || rate <= 0) continue;
 
-    const estimatedOut = simulateHop(p, fromToken.address, size);
-    if (estimatedOut <= 0) continue;
+    const rawOut = simulateHop(p, fromToken.address, size);
+    if (rawOut <= 0) continue;
+    // 안전 상한 — multi-hop 과 동일 이유로 spot × (1-fee) 위로는 못 가게.
+    const spotMaxOut = size * rate * (1 - p.fee / 1_000_000);
+    const estimatedOut = Math.min(rawOut, spotMaxOut);
 
     candidates.push({
       kind: p.version === "v3" ? "v3-single" : "v2-single",
@@ -241,8 +244,17 @@ export function rankRoutes(
         // the second hop's input is what ACTUALLY arrives post-impact.
         const midOut = simulateHop(first, fromToken.address, size);
         if (midOut <= 0) continue;
-        const estimatedOut = simulateHop(second, intermediate.address, midOut);
-        if (estimatedOut <= 0) continue;
+        const rawOut = simulateHop(second, intermediate.address, midOut);
+        if (rawOut <= 0) continue;
+
+        // 안전 상한: 어떤 multi-hop 도 zero-impact spot rate × (1-fee) 보다 더
+        // 받을 수 없음. 시뮬레이터가 그보다 크게 예측하면 (얕은 풀 / 정수 정밀도
+        // 이슈 등) downstream 의 amountOutMinimum 계산이 실제 tx 가 만족 못하는
+        // 값이 되어 revert. 보수적으로 cap 해서 swap 실패 줄임.
+        const cumFeeFraction =
+          1 - (1 - first.fee / 1_000_000) * (1 - second.fee / 1_000_000);
+        const spotMaxOut = size * rate1 * rate2 * (1 - cumFeeFraction);
+        const estimatedOut = Math.min(rawOut, spotMaxOut);
 
         candidates.push({
           kind: version === "v3" ? "v3-multi" : "v2-multi",
@@ -260,6 +272,35 @@ export function rankRoutes(
             1 - (1 - first.fee / 1_000_000) * (1 - second.fee / 1_000_000),
           path: [fromToken, intermediate, toToken],
         });
+      }
+    }
+  }
+
+  // ── Multi-hop sanity demotion vs direct route ─────────────────────────
+  // 얕은 풀 / tick-crossing 으로 multi-hop 시뮬레이션이 실제 결과를 크게
+  // 과대추정하는 경우가 잦다. Direct pool 이 같은 페어에 존재하는데 multi-hop
+  // 예측이 direct × MULTI_HOP_TRUST_RATIO 보다 비현실적으로 좋으면 시뮬레이터
+  // 오류로 보고 multi-hop 을 direct 보다 낮은 추정치로 demote — 결과적으로
+  // 랭킹에서 direct 가 이김 (direct 는 1풀만 보니까 simulator 정확도 훨씬 좋음).
+  //
+  // 1.2x 이내면 가격 차이가 정말 있을 수도 있으므로 그대로 두고 raw 비교.
+  // 1.2x+ 는 거의 시뮬레이터 오류라 보고 multi-hop 을 0.99 × direct 로 깎아서
+  // ranking 시 direct 가 자동으로 선택되게 함.
+  const MULTI_HOP_TRUST_RATIO = 1.2;
+  const bestDirect = candidates
+    .filter((c) => c.hops.length === 1)
+    .reduce(
+      (best, c) => (c.estimatedOut > best ? c.estimatedOut : best),
+      0,
+    );
+  if (bestDirect > 0) {
+    for (const c of candidates) {
+      if (c.hops.length === 1) continue;
+      const trustCap = bestDirect * MULTI_HOP_TRUST_RATIO;
+      if (c.estimatedOut > trustCap) {
+        // 의심스러운 multi-hop — direct 보다 약간 낮게 demote 해서 direct 가
+        // 항상 이기게. 사용자는 direct 로 swap 하게 됨 (안전).
+        c.estimatedOut = bestDirect * 0.99;
       }
     }
   }

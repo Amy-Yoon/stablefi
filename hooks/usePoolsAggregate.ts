@@ -2,12 +2,13 @@
 
 import { useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
-import type { Abi } from "viem";
+import { formatUnits, type Abi } from "viem";
 import { publicClient } from "@/lib/client";
 import ERC20Json from "@/lib/abi/ERC20.json";
 import { fetchV2Pool, fetchV3Pool, type PoolState } from "./usePool";
 import { useMyPositions } from "./useMyPositions";
 import { useMyV2Positions } from "./useMyV2Positions";
+import { usePoolStats } from "./usePoolStats";
 import { useWallet } from "@/context/WalletContext";
 import type { PoolRef } from "@/lib/chain";
 import type { Pool } from "@/components/pool/PoolList";
@@ -105,6 +106,11 @@ export function usePoolsAggregate(refs: PoolRef[]) {
   const myEarnedTotalWKRC =
     myV3Positions.totalEarnedWKRC + myV2Positions.totalEarnedWKRC;
 
+  // 풀별 24h 수수료 / 거래량 — 별도 endpoint 로 한 번에 받아옴.
+  // staleTime 5분이라 RPC 부담 거의 없음.
+  const { data: statsData } = usePoolStats(loadedStates);
+  const stats = statsData?.stats ?? {};
+
   // Walk balances back onto the pool rows in insertion order
   const balIter = balanceQueries[Symbol.iterator]();
 
@@ -143,6 +149,32 @@ export function usePoolsAggregate(refs: PoolRef[]) {
     }
 
     const myPos = myPositionsByPool[state.address.toLowerCase()];
+
+    // 7d volume + APR — stats 가 도착했고 TVL 계산 가능할 때만 채움.
+    // 둘 중 하나라도 빠지면 undefined → UI 가 "집계 중" 으로 graceful fallback.
+    // window 가 7일이니 환산은 × (365/7).
+    let volume24hWKRC: number | undefined;
+    let apr: number | undefined;
+    const stat = stats[state.address.toLowerCase()];
+    if (stat && tvlWKRC !== undefined && tvlWKRC > 0) {
+      const p0 = wkrcPrices[state.token0.address.toLowerCase()];
+      const p1 = wkrcPrices[state.token1.address.toLowerCase()];
+      if (p0 !== undefined && p1 !== undefined) {
+        // BigInt → human via formatUnits 으로 정밀도 유지 (Number 직접 변환 시
+        // 18-decimal 토큰 큰 금액에서 precision loss).
+        const vol0 = parseFloat(formatUnits(BigInt(stat.volume0Raw), state.token0.decimals));
+        const vol1 = parseFloat(formatUnits(BigInt(stat.volume1Raw), state.token1.decimals));
+        const fee0 = parseFloat(formatUnits(BigInt(stat.fee0Raw), state.token0.decimals));
+        const fee1 = parseFloat(formatUnits(BigInt(stat.fee1Raw), state.token1.decimals));
+        // volume24hWKRC 는 호환을 위한 변수명이지만 실제로는 7d 누적 거래량.
+        // UI 는 "이게 있으면 거래 있음" 정도의 boolean 처럼 쓰니 OK.
+        volume24hWKRC = vol0 * p0 + vol1 * p1;
+        const feesWindowWKRC = fee0 * p0 + fee1 * p1;
+        // APR = (윈도우 fees / TVL) × (365 / 7) × 100. 7일 평균을 연환산.
+        apr = (feesWindowWKRC / tvlWKRC) * (365 / 7) * 100;
+      }
+    }
+
     pools.push({
       address: state.address,
       version: state.version,
@@ -150,9 +182,14 @@ export function usePoolsAggregate(refs: PoolRef[]) {
       token1: state.token1,
       fee: state.fee,
       tvlWKRC,
+      volume24hWKRC,
+      apr,
       myDepositedWKRC: myPos?.depositedWKRC,
       myEarnedWKRC: myPos?.earnedWKRC,
       myPositionSlices: myPos?.positions,
+      myRealizedFeesWKRC: myPos?.realizedFeesWKRC,
+      myOldestMintTimestamp: myPos?.oldestMintTimestamp,
+      myEffectiveAPR: myPos?.effectiveAPR,
     });
     states.push(state);
   });
